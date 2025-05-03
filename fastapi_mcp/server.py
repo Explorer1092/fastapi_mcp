@@ -10,7 +10,7 @@ import mcp.types as types
 
 from fastapi_mcp.openapi.convert import convert_openapi_to_mcp_tools
 from fastapi_mcp.transport.sse import FastApiSseTransport
-from fastapi_mcp.types import HTTPRequestInfo, AuthConfig
+from fastapi_mcp.types import HTTPRequestInfo, AuthConfig, ToolVisibilityCallback
 
 import logging
 
@@ -113,6 +113,19 @@ class FastApiMCP:
             Optional[AuthConfig],
             Doc("Configuration for MCP authentication"),
         ] = None,
+        tool_visibility_callback: Annotated[
+            Optional[ToolVisibilityCallback],
+            Doc(
+                """
+                Optional callback function to determine tool visibility based on custom logic.
+                The callback function takes two parameters:
+                - operation_id: str - The operation ID of the tool
+                - operation_details: Dict[str, Any] - The details of the operation from the OpenAPI schema
+                It should return True if the tool should be visible, False otherwise.
+                This is applied after the standard filtering mechanisms (include/exclude operations/tags).
+                """
+            ),
+        ] = None,
     ):
         # Validate operation and tag filtering options
         if include_operations is not None and exclude_operations is not None:
@@ -137,6 +150,7 @@ class FastApiMCP:
         self._include_tags = include_tags
         self._exclude_tags = exclude_tags
         self._auth_config = auth_config
+        self._tool_visibility_callback = tool_visibility_callback
 
         if self._auth_config:
             self._auth_config = self._auth_config.model_validate(self._auth_config)
@@ -469,7 +483,7 @@ class FastApiMCP:
 
     def _filter_tools(self, tools: List[types.Tool], openapi_schema: Dict[str, Any]) -> List[types.Tool]:
         """
-        Filter tools based on operation IDs and tags.
+        Filter tools based on operation IDs, tags, and custom visibility callback.
 
         Args:
             tools: List of tools to filter
@@ -483,10 +497,13 @@ class FastApiMCP:
             and self._exclude_operations is None
             and self._include_tags is None
             and self._exclude_tags is None
+            and self._tool_visibility_callback is None
         ):
             return tools
 
         operations_by_tag: Dict[str, List[str]] = {}
+        operations_details: Dict[str, Dict[str, Any]] = {}
+        
         for path, path_item in openapi_schema.get("paths", {}).items():
             for method, operation in path_item.items():
                 if method not in ["get", "post", "put", "delete", "patch"]:
@@ -496,6 +513,12 @@ class FastApiMCP:
                 if not operation_id:
                     continue
 
+                operations_details[operation_id] = {
+                    "path": path,
+                    "method": method,
+                    "operation": operation,
+                }
+                
                 tags = operation.get("tags", [])
                 for tag in tags:
                     if tag not in operations_by_tag:
@@ -520,6 +543,24 @@ class FastApiMCP:
 
             all_operations = {tool.name for tool in tools}
             operations_to_include.update(all_operations - excluded_operations)
+
+        if (
+            self._include_operations is None
+            and self._exclude_operations is None
+            and self._include_tags is None
+            and self._exclude_tags is None
+            and self._tool_visibility_callback is not None
+        ):
+            operations_to_include = {tool.name for tool in tools}
+
+        if self._tool_visibility_callback is not None:
+            callback_filtered_operations = set()
+            for operation_id in operations_to_include:
+                if operation_id in operations_details and self._tool_visibility_callback(
+                    operation_id, operations_details[operation_id]
+                ):
+                    callback_filtered_operations.add(operation_id)
+            operations_to_include = callback_filtered_operations
 
         filtered_tools = [tool for tool in tools if tool.name in operations_to_include]
 

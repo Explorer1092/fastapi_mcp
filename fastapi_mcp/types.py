@@ -1,5 +1,5 @@
 import time
-from typing import Any, Dict, Annotated, Union, Optional, Sequence, Literal, List
+from typing import Any, Dict, Annotated, Union, Optional, Sequence, Literal, List, Callable
 from typing_extensions import Doc
 from pydantic import (
     BaseModel,
@@ -13,6 +13,8 @@ from fastapi import params
 
 
 StrHttpUrl = Annotated[Union[str, HttpUrl], HttpUrl]
+
+ToolVisibilityCallback = Callable[[str, Dict[str, Any]], bool]
 
 
 class BaseType(BaseModel):
