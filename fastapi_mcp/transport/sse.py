@@ -1,6 +1,7 @@
 from uuid import UUID
 import logging
 from typing import Union
+import json
 
 from anyio.streams.memory import MemoryObjectSendStream
 from fastapi import Request, Response, BackgroundTasks, HTTPException
@@ -58,6 +59,30 @@ class FastApiSseTransport(SseServerTransport):
         logger.debug(f"Received JSON: {body.decode()}")
 
         try:
+            # 预处理：检查并修复双重序列化的 arguments
+            try:
+                raw_data = json.loads(body.decode())
+                
+                # 检查是否存在双重序列化的 arguments
+                if (isinstance(raw_data, dict) and 
+                    'params' in raw_data and 
+                    isinstance(raw_data['params'], dict) and 
+                    'arguments' in raw_data['params'] and 
+                    isinstance(raw_data['params']['arguments'], str)):
+                    try:
+                        # 尝试解析嵌套的 JSON 字符串
+                        parsed_args = json.loads(raw_data['params']['arguments'])
+                        raw_data['params']['arguments'] = parsed_args
+                        # 重新序列化修复后的数据
+                        body = json.dumps(raw_data).encode()
+                        logger.debug(f"Fixed double-serialized arguments: {raw_data['params']['arguments']}")
+                    except json.JSONDecodeError:
+                        # 如果不是有效的 JSON，保持原样
+                        logger.debug("Arguments is not valid JSON, keeping as string")
+            except json.JSONDecodeError:
+                # 如果整个 body 不是有效 JSON，让后续的验证处理错误
+                pass
+            
             message = JSONRPCMessage.model_validate_json(body)
 
             # HACK to inject the HTTP request info into the MCP message,
